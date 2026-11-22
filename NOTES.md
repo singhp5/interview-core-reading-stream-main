@@ -16,6 +16,7 @@
   - check each window comes out exactly once;
   - check a window closes at exactly the right reading, and that a quiet device keeps its windows open;
   - run a million readings and check memory stays flat. I confirmed this last test fails, holding about 1M seqs, when pruning is switched off.
+- **Tier 3, p95.** Every window now has an exact `p95`, in both `summarize` and the stream. The Tier 1 expectations are updated with values worked out by hand, and `test/p95.test.ts` covers the rank rule, numeric sorting, and that only accepted readings count.
 
 **Structure.** The three drop rules live in one place, `src/accept.ts`, used by all three functions so they can't drift apart. The window helpers (running totals, sort order) are in `src/window.ts`. The exports and signatures in `src/index.ts` haven't changed. `createStream` also returns a `stats()` method, which is the test hook for checking memory.
 
@@ -30,11 +31,11 @@ Each rule is "drop if true", so the order of the checks only changes which reaso
 
 **When a window closes.** A device's window `[s, s+W)` closes once `newest − L ≥ s + W`, where `newest` is that device's newest accepted `ts`, `L` is `maxLatenessMs` and `W` is `windowMs`. After that point, any reading that could land in the window is more than `L` behind `newest`, so it would be dropped. `newest` never goes down, so a closed window can never be reopened.
 
-**Open windows.** Every open window satisfies `newest − L − W < s ≤ newest`, so a device has at most `ceil(L/W) + 1` of them. Each one holds a running total of constant size, not the readings themselves.
+**Open windows.** Every open window satisfies `newest − L − W < s ≤ newest`, so a device has at most `ceil(L/W) + 1` of them. Each one holds a running total plus that window's accepted values, which the exact p95 needs. So a device holds at most `(ceil(L/W) + 1) × (readings per window)` values. That depends on the device's reading rate, not on how long the stream runs.
 
 **Remembered seqs.** A resend has the same `ts` as the original, so a seq whose `ts < newest − L` can be forgotten: any resend of it would be dropped as late anyway. The map is cleared out only when it has doubled in size, so it never holds more than `max(64, 2 × the seqs within the lateness horizon)`, and the cost per reading stays O(1) on average. A reading that's already late isn't stored at all.
 
-In the million-reading test, this works out to about 60 seqs and at most 4 open windows per device, no matter how long the run is.
+In the million-reading test, this works out to about 60 seqs, at most 4 open windows and at most 8 held values per device, no matter how long the run is.
 
 ## Known limits (documented rather than fixed, as agreed)
 
@@ -51,9 +52,15 @@ Fixing 1–3 properly means putting a cap on what we hold, for example removing 
 - Window starts use `Math.floor`, so a negative `ts` falls into the window below zero. A `-0` window start is normalized to `0`.
 - Within a single `push`/`end` call, windows come back sorted, even though the README allows any order.
 
-## What I skipped, and why
+## p95: exact, by nearest rank
 
-- **p95 (Tier 3).** `WindowSummary` is compared with `deepEqual` in tests, including the hidden ones you run. Adding a field, even an optional one, risks breaking those, so I'd want to agree the shape first. If we went ahead: exact p95 in `summarize` (keep each window's values), and an approximate one in the stream, using a fixed-size sketch such as a t-digest or a fixed histogram over `validRange`, since keeping every value in a window isn't bounded.
+**Definition.** `p95 = sorted[ceil(0.95 × n) − 1]`: the smallest value with at least 95% of the window's values at or below it. It's always one of the actual readings, nothing is interpolated, and it's easy to check by hand.
+
+**Why exact, not approximate.** The README requires the stream to give the same values as `summarize`. An approximate sketch in the stream (a t-digest, or a histogram over `validRange`) would break that, unless `summarize` used the same approximation and reported approximate values for a batch it has entirely in hand. The cost of exact is that each open window keeps its values instead of a constant-size total. That still doesn't grow with how long the stream runs, because a window's values are freed when it closes. It does grow with readings per window, so a device sending very fast with a wide window would hold a lot.
+
+**If that became a problem**, I'd switch both functions to the same fixed-size sketch, accept an approximate p95, and say so in the type.
+
+**Always present.** `p95` is now always set, as the README describes. It's typed as optional (`p95?: number`) so code built against the old shape still compiles. The risk is that a test comparing summaries with `deepEqual` against the old shape will now see an extra field.
 
 ## Next, with more time
 
