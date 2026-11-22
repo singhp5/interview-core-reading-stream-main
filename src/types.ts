@@ -39,6 +39,12 @@ export type WindowSummary = {
   min: number;
   max: number;
   avg: number;
+  /**
+   * Exact 95th percentile of the window's values, by nearest rank:
+   * `sorted[ceil(0.95 * count) - 1]`. Always set by this library; optional in the
+   * type so code built against the original shape keeps compiling.
+   */
+  p95?: number;
 };
 
 /** A period in which a device sent no accepted readings. */

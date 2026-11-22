@@ -10,7 +10,7 @@ export type Stream = {
 };
 
 /** What the stream is holding right now. For tests that check memory stays bounded. */
-export type StreamStats = { devices: number; openWindows: number; seenSeqs: number };
+export type StreamStats = { devices: number; openWindows: number; seenSeqs: number; heldValues: number };
 
 /**
  * Tier 2. A streaming version of `summarize` that holds bounded memory.
@@ -23,8 +23,9 @@ export type StreamStats = { devices: number; openWindows: number; seenSeqs: numb
  * its windows open until `end()`.
  *
  * Held per device: at most `ceil(maxLatenessMs / windowMs) + 1` open windows (each
- * a constant-size running total), and the seqs within the lateness horizon. See
- * `NOTES.md` for the argument and its limits.
+ * running totals plus its values, for the exact p95), and the seqs within the
+ * lateness horizon. None of it grows with how long the stream runs. See `NOTES.md`
+ * for the argument and its limits.
  */
 export function createStream(config: Config): Stream & { stats(): StreamStats } {
   const { windowMs, maxLatenessMs } = config;
@@ -67,8 +68,12 @@ export function createStream(config: Config): Stream & { stats(): StreamStats } 
 
     stats() {
       let openWindows = 0;
-      for (const byStart of open.values()) openWindows += byStart.size;
-      return { ...acceptor.stats(), openWindows };
+      let heldValues = 0;
+      for (const byStart of open.values()) {
+        openWindows += byStart.size;
+        for (const agg of byStart.values()) heldValues += agg.values.length;
+      }
+      return { ...acceptor.stats(), openWindows, heldValues };
     },
   };
 }

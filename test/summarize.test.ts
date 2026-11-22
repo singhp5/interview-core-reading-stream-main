@@ -28,14 +28,14 @@ test('no readings gives no windows', () => {
 
 test('summarizes one window', () => {
   assert.deepEqual(summarize([r('a', 1_000, 1), r('a', 2_000, 2), r('a', 3_000, 6)], config), [
-    { deviceId: 'a', windowStart: 0, count: 3, min: 1, max: 6, avg: 3 },
+    { deviceId: 'a', windowStart: 0, count: 3, min: 1, max: 6, avg: 3, p95: 6 },
   ]);
 });
 
 test('a reading at a window boundary starts the next window', () => {
   assert.deepEqual(summarize([r('a', 59_999, 1), r('a', 60_000, 2)], config), [
-    { deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1 },
-    { deviceId: 'a', windowStart: 60_000, count: 1, min: 2, max: 2, avg: 2 },
+    { deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1, p95: 1 },
+    { deviceId: 'a', windowStart: 60_000, count: 1, min: 2, max: 2, avg: 2, p95: 2 },
   ]);
 });
 
@@ -71,17 +71,17 @@ test('drops invalid values', () => {
     [r('a', 1_000, null), r('a', 2_000, NaN), r('a', 3_000, Infinity), r('a', 4_000, 126), r('a', 5_000, -41), r('a', 6_000, 10)],
     config,
   );
-  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 1, min: 10, max: 10, avg: 10 }]);
+  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 1, min: 10, max: 10, avg: 10, p95: 10 }]);
 });
 
 test('the bounds of validRange are valid', () => {
   const out = summarize([r('a', 1_000, -40), r('a', 2_000, 125)], config);
-  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 2, min: -40, max: 125, avg: 42.5 }]);
+  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 2, min: -40, max: 125, avg: 42.5, p95: 125 }]);
 });
 
 test('drops a resent reading and keeps the first arrival', () => {
   const out = summarize([r('a', 1_000, 1, 7), r('a', 2_000, 3), r('a', 1_000, 50, 7)], config);
-  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 2, min: 1, max: 3, avg: 2 }]);
+  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 2, min: 1, max: 3, avg: 2, p95: 3 }]);
 });
 
 test('the same seq on different devices is not a duplicate', () => {
@@ -92,12 +92,12 @@ test('the same seq on different devices is not a duplicate', () => {
 test('accepts readings out of order, up to exactly maxLatenessMs behind', () => {
   // 5 000 is exactly maxLatenessMs behind 10 000, so it is still accepted.
   const out = summarize([r('a', 10_000, 1), r('a', 6_000, 3), r('a', 5_000, 5)], config);
-  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 3, min: 1, max: 5, avg: 3 }]);
+  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 3, min: 1, max: 5, avg: 3, p95: 5 }]);
 });
 
 test('drops a reading more than maxLatenessMs behind the newest for its device', () => {
   const out = summarize([r('a', 10_000, 1), r('a', 4_999, 100)], config);
-  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1 }]);
+  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1, p95: 1 }]);
 });
 
 test('lateness is measured per device', () => {
@@ -111,7 +111,7 @@ test('lateness is measured per device', () => {
 test('only accepted readings move the newest timestamp forward', () => {
   // The invalid reading at 100 s must not make the reading at 10 s too late.
   const out = summarize([r('a', 9_000, 1), r('a', 100_000, null), r('a', 10_000, 3)], config);
-  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 2, min: 1, max: 3, avg: 2 }]);
+  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 2, min: 1, max: 3, avg: 2, p95: 3 }]);
 });
 
 test('runs on the sample data', () => {

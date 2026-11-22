@@ -99,8 +99,8 @@ test('a window closes exactly when the newest accepted ts is maxLatenessMs past 
   const stream = createStream(config);
   assert.deepEqual(stream.push(r('a', 1_000, 1)), []);
   assert.deepEqual(stream.push(r('a', 64_999, 2)), []); // a reading at 59 999 could still arrive
-  assert.deepEqual(stream.push(r('a', 65_000, 3)), [{ deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1 }]);
-  assert.deepEqual(stream.end(), [{ deviceId: 'a', windowStart: 60_000, count: 2, min: 2, max: 3, avg: 2.5 }]);
+  assert.deepEqual(stream.push(r('a', 65_000, 3)), [{ deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1, p95: 1 }]);
+  assert.deepEqual(stream.end(), [{ deviceId: 'a', windowStart: 60_000, count: 2, min: 2, max: 3, avg: 2.5, p95: 3 }]);
 });
 
 test('dropped readings never close a window', () => {
@@ -129,7 +129,7 @@ test('a window can collect several out-of-order readings before it closes', () =
   assert.deepEqual(stream.push(r('a', 12_000, 4)), []);
   assert.deepEqual(stream.push(r('a', 9_000, 2)), []);
   assert.deepEqual(stream.push(r('a', 7_500, 6)), []);
-  assert.deepEqual(stream.push(r('a', 15_000, 1)), [{ deviceId: 'a', windowStart: 0, count: 2, min: 2, max: 6, avg: 4 }]);
+  assert.deepEqual(stream.push(r('a', 15_000, 1)), [{ deviceId: 'a', windowStart: 0, count: 2, min: 2, max: 6, avg: 4, p95: 6 }]);
 });
 
 test('memory stays bounded over a long run', () => {
@@ -139,7 +139,7 @@ test('memory stays bounded over a long run', () => {
   const rand = prng(5);
   const total = 1_000_000;
   const peaks: StreamPeak[] = [];
-  let peak = { openWindows: 0, seenSeqs: 0 };
+  let peak: StreamPeak = { openWindows: 0, seenSeqs: 0, heldValues: 0 };
   let emitted = 0;
 
   // Lazily make readings 1 s apart per device, shuffled in blocks so they arrive out of
@@ -157,6 +157,7 @@ test('memory stays bounded over a long run', () => {
       const s = stream.stats();
       if (s.openWindows > peak.openWindows) peak.openWindows = s.openWindows;
       if (s.seenSeqs > peak.seenSeqs) peak.seenSeqs = s.seenSeqs;
+      if (s.heldValues > peak.heldValues) peak.heldValues = s.heldValues;
     }
     block.length = 0;
   };
@@ -176,6 +177,8 @@ test('memory stays bounded over a long run', () => {
   // Open windows per device: at most ceil(maxLatenessMs / windowMs) + 1.
   const windowBound = devices * (Math.ceil(cfg.maxLatenessMs / cfg.windowMs) + 1);
   assert.ok(peak.openWindows <= windowBound, `open windows peaked at ${peak.openWindows} > ${windowBound}`);
+  // Values held for p95: readings are 1 s apart, so at most 2 accepted per 2 s window.
+  assert.ok(peak.heldValues <= windowBound * 2, `held values peaked at ${peak.heldValues}`);
   // Seen seqs: a small constant per device (live horizon plus prune slack), not ~333k each.
   assert.ok(peak.seenSeqs <= devices * 256, `seen seqs peaked at ${peak.seenSeqs}`);
   // And the peak is reached early: after 10x more readings it has barely moved. A stream that
@@ -184,7 +187,8 @@ test('memory stays bounded over a long run', () => {
   const late = peaks.at(-1)!;
   assert.ok(late.openWindows <= early.openWindows * 1.5, `open windows grew ${early.openWindows} -> ${late.openWindows}`);
   assert.ok(late.seenSeqs <= early.seenSeqs * 1.5, `seen seqs grew ${early.seenSeqs} -> ${late.seenSeqs}`);
+  assert.ok(late.heldValues <= early.heldValues * 1.5, `held values grew ${early.heldValues} -> ${late.heldValues}`);
   assert.ok(emitted > 100_000);
 });
 
-type StreamPeak = { openWindows: number; seenSeqs: number };
+type StreamPeak = { openWindows: number; seenSeqs: number; heldValues: number };

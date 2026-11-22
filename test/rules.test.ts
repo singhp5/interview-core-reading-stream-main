@@ -16,20 +16,20 @@ const r = (deviceId: string, ts: number, value: number | null, seq = nextSeq++):
 
 test('an invalid reading followed by a valid resend: both are dropped', () => {
   assert.deepEqual(summarize([r('a', 1_000, null, 7), r('a', 1_000, 5, 7), r('a', 2_000, 1)], config), [
-    { deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1 },
+    { deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1, p95: 1 },
   ]);
 });
 
 test('the resend of a reading dropped as late is dropped too', () => {
   // The original at 1 s is too late (behind 10 s), and its resend is both late and a duplicate.
   const out = summarize([r('a', 10_000, 1), r('a', 1_000, 2, 7), r('a', 1_000, 2, 7)], config);
-  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1 }]);
+  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1, p95: 1 }]);
 });
 
 test('a dropped duplicate does not move the newest timestamp forward', () => {
   // The duplicate at 100 s (an inconsistent resend) is dropped, so 10 s is still on time.
   const out = summarize([r('a', 9_000, 1, 7), r('a', 100_000, 2, 7), r('a', 10_000, 3)], config);
-  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 2, min: 1, max: 3, avg: 2 }]);
+  assert.deepEqual(out, [{ deviceId: 'a', windowStart: 0, count: 2, min: 1, max: 3, avg: 2, p95: 3 }]);
 });
 
 test('a late reading does not move the newest timestamp', () => {
@@ -71,10 +71,10 @@ test('several devices across several windows', () => {
     { ...config, maxLatenessMs: 100_000 },
   );
   assert.deepEqual(out, [
-    { deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1 },
-    { deviceId: 'a', windowStart: 60_000, count: 2, min: 3, max: 5, avg: 4 },
-    { deviceId: 'b', windowStart: 0, count: 2, min: 2, max: 6, avg: 4 },
-    { deviceId: 'b', windowStart: 60_000, count: 1, min: 4, max: 4, avg: 4 },
+    { deviceId: 'a', windowStart: 0, count: 1, min: 1, max: 1, avg: 1, p95: 1 },
+    { deviceId: 'a', windowStart: 60_000, count: 2, min: 3, max: 5, avg: 4, p95: 5 },
+    { deviceId: 'b', windowStart: 0, count: 2, min: 2, max: 6, avg: 4, p95: 6 },
+    { deviceId: 'b', windowStart: 60_000, count: 1, min: 4, max: 4, avg: 4, p95: 4 },
   ]);
 });
 
