@@ -13,6 +13,15 @@ export type Stream = {
 export type StreamStats = { devices: number; openWindows: number; seenSeqs: number; heldValues: number };
 
 /**
+ * One device's open windows. `starts[head..]` holds their starts in ascending order,
+ * so the oldest window is always at the front and closing never scans the rest.
+ */
+type OpenWindows = { aggs: Map<number, WindowAgg>; starts: number[]; head: number };
+
+/** Compact `starts` once this many closed entries have built up at the front. */
+const COMPACT_AFTER = 32;
+
+/**
  * Tier 2. A streaming version of `summarize` that holds bounded memory.
  * See "Tier 2" in the README.
  *
@@ -26,41 +35,81 @@ export type StreamStats = { devices: number; openWindows: number; seenSeqs: numb
  * running totals plus its values, for the exact p95), and the seqs within the
  * lateness horizon. None of it grows with how long the stream runs. See `NOTES.md`
  * for the argument and its limits.
+ *
+ * Time per reading: O(1) amortized to close windows, since they're kept in start
+ * order and only the front is checked. Opening a window older than the newest open
+ * one is a sorted insert, O(open windows) in the worst case; with readings nearly
+ * in order that's rare, and it's an append otherwise.
  */
 export function createStream(config: Config): Stream & { stats(): StreamStats } {
   const { windowMs, maxLatenessMs } = config;
   const acceptor = createAcceptor(config, { prune: true });
-  const open = new Map<string, Map<number, WindowAgg>>();
+  const open = new Map<string, OpenWindows>();
+  let ended = false;
+
+  function checkNotEnded(): void {
+    // After end() every window has been emitted; carrying on would emit some twice.
+    if (ended) throw new Error('stream has already ended');
+  }
+
+  /** Add `start` to `w.starts`, keeping it sorted. Usually an append. */
+  function insertStart(w: OpenWindows, start: number): void {
+    const { starts } = w;
+    if (starts.length === w.head || start > starts[starts.length - 1]) {
+      starts.push(start);
+      return;
+    }
+    let lo = w.head;
+    let hi = starts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (starts[mid] < start) lo = mid + 1;
+      else hi = mid;
+    }
+    starts.splice(lo, 0, start);
+  }
 
   return {
     push(reading) {
+      checkNotEnded();
       if (acceptor.offer(reading) !== 'accepted') return [];
       const { deviceId, ts } = reading;
 
-      let byStart = open.get(deviceId);
-      if (!byStart) open.set(deviceId, (byStart = new Map()));
+      let w = open.get(deviceId);
+      if (!w) open.set(deviceId, (w = { aggs: new Map(), starts: [], head: 0 }));
       const start = windowStartOf(ts, windowMs);
-      let agg = byStart.get(start);
-      if (!agg) byStart.set(start, (agg = newAgg()));
+      let agg = w.aggs.get(start);
+      if (!agg) {
+        w.aggs.set(start, (agg = newAgg()));
+        // A NaN ts gives a NaN window, which can never pass the close check below.
+        // Kept out of the sorted list so it can't block the windows behind it; it
+        // comes out at end(), as it would from summarize.
+        if (!Number.isNaN(start)) insertStart(w, start);
+      }
       addValue(agg, reading.value as number);
 
-      // Close every window of this device that no future accepted reading can reach.
-      // The reading just added can't be in one: its window ends after ts >= horizon.
+      // Close windows from the oldest up, until one is still reachable. They come out
+      // in start order, which is already the output order for one device.
       const horizon = acceptor.newest(deviceId) - maxLatenessMs;
       const closed: WindowSummary[] = [];
-      for (const [s, a] of byStart) {
-        if (s + windowMs <= horizon) {
-          closed.push(toSummary(deviceId, s, a));
-          byStart.delete(s);
-        }
+      while (w.head < w.starts.length && w.starts[w.head] + windowMs <= horizon) {
+        const s = w.starts[w.head++];
+        closed.push(toSummary(deviceId, s, w.aggs.get(s)!));
+        w.aggs.delete(s);
       }
-      return closed.sort(compareSummaries);
+      if (w.head >= COMPACT_AFTER && w.head * 2 >= w.starts.length) {
+        w.starts = w.starts.slice(w.head);
+        w.head = 0;
+      }
+      return closed;
     },
 
     end() {
+      checkNotEnded();
+      ended = true;
       const out: WindowSummary[] = [];
-      for (const [deviceId, byStart] of open) {
-        for (const [s, a] of byStart) out.push(toSummary(deviceId, s, a));
+      for (const [deviceId, w] of open) {
+        for (const [s, agg] of w.aggs) out.push(toSummary(deviceId, s, agg));
       }
       open.clear();
       return out.sort(compareSummaries);
@@ -69,9 +118,9 @@ export function createStream(config: Config): Stream & { stats(): StreamStats } 
     stats() {
       let openWindows = 0;
       let heldValues = 0;
-      for (const byStart of open.values()) {
-        openWindows += byStart.size;
-        for (const agg of byStart.values()) heldValues += agg.values.length;
+      for (const w of open.values()) {
+        openWindows += w.aggs.size;
+        for (const agg of w.aggs.values()) heldValues += agg.values.length;
       }
       return { ...acceptor.stats(), openWindows, heldValues };
     },

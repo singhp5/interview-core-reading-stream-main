@@ -37,6 +37,8 @@ Each rule is "drop if true", so the order of the checks only changes which reaso
 
 In the million-reading test, this works out to about 60 seqs, at most 4 open windows and at most 8 held values per device, no matter how long the run is.
 
+**Time per reading.** Each device's open windows are kept in start order, so closing only checks the oldest ones and stops at the first window that's still reachable. My first version checked every open window on every accepted reading, which costs `O(L/W)` per reading. A review caught it: with `L` = 1 h and `W` = 1 s, 200k readings took 10.2 s. They now take 0.16 s, against 0.05 s with the defaults. A test guards the ratio. Opening a window older than the newest open one is a sorted insert. That's rare when readings arrive nearly in order, and an append otherwise.
+
 ## Known limits (documented rather than fixed, as agreed)
 
 1. **Devices that never get a reading accepted.** If a device only sends invalid readings, its `newest` never moves, so nothing is ever cleared out and its seen-set keeps growing.
@@ -52,7 +54,9 @@ The only addition is `@types/node`, as a dev dependency. It's there so the edito
 
 ## Assumptions
 
-- `push` after `end()` isn't defined. The stream doesn't guard against it.
+- Calling `push` or `end` after `end()` throws. Carrying on would start new copies of windows that were already emitted.
+- `ts` isn't validated, because the README's rules don't cover it. A `NaN` timestamp is accepted into a `NaN` window in both `summarize` and the stream. The stream keeps that window aside so it can't block other windows from closing, and emits it at `end()`. Adding a drop rule for non-finite `ts` would be my first change if the spec allowed it.
+- The config isn't validated either. A `windowMs` of 0 or below, or a negative `maxLatenessMs`, gives meaningless output.
 - Window starts use `Math.floor`, so a negative `ts` falls into the window below zero. A `-0` window start is normalized to `0`.
 - Within a single `push`/`end` call, windows come back sorted, even though the README allows any order.
 

@@ -192,3 +192,52 @@ test('memory stays bounded over a long run', () => {
 });
 
 type StreamPeak = { openWindows: number; seenSeqs: number; heldValues: number };
+
+test('push and end after end() throw, so no window can come out twice', () => {
+  const stream = createStream(config);
+  stream.push(r('a', 1_000, 1));
+  assert.equal(stream.end().length, 1);
+  assert.throws(() => stream.push(r('a', 2_000, 2)), /already ended/);
+  assert.throws(() => stream.end(), /already ended/);
+});
+
+test('closes windows in start order, even when they opened out of order', () => {
+  const cfg = { ...config, windowMs: 1_000, maxLatenessMs: 10_000 };
+  const stream = createStream(cfg);
+  // Windows open as 9 s, 5 s, 7 s, 2 s; all four are closed by the reading at 20 s.
+  for (const ts of [9_000, 5_000, 7_000, 2_000]) assert.deepEqual(stream.push(r('a', ts, 1)), []);
+  assert.deepEqual(
+    stream.push(r('a', 20_000, 1)).map((w) => w.windowStart),
+    [2_000, 5_000, 7_000, 9_000],
+  );
+});
+
+test('a NaN timestamp does not stop later windows from closing', () => {
+  const readings = [r('a', NaN, 1), r('a', 1_000, 2), r('a', 70_000, 3)];
+  const stream = createStream(config);
+  assert.deepEqual(stream.push(readings[0]), []);
+  assert.deepEqual(stream.push(readings[1]), []);
+  assert.deepEqual(
+    stream.push(readings[2]).map((w) => w.windowStart),
+    [0],
+  );
+  const rest = stream.end();
+  assert.equal(rest.length, 2);
+  assert.ok(rest.some((w) => Number.isNaN(w.windowStart)));
+  assert.equal(summarize(readings, config).length, 3);
+});
+
+test('time per reading does not grow with maxLatenessMs / windowMs', () => {
+  // With L/W = 3600 a device has ~3600 open windows; closing must not scan them all.
+  const time = (cfg: Config) => {
+    const stream = createStream(cfg);
+    const t0 = performance.now();
+    for (let i = 0; i < 200_000; i++) stream.push({ deviceId: 'a', ts: i * 1_000, seq: i, value: 1 });
+    return performance.now() - t0;
+  };
+  time(config); // warm up
+  const small = time(config);
+  const large = time({ ...config, windowMs: 1_000, maxLatenessMs: 3_600_000 });
+  // Before the fix this ratio was ~160x. Allow plenty of slack for noisy machines.
+  assert.ok(large < small * 10 + 200, `L/W = 3600 took ${large.toFixed(0)} ms vs ${small.toFixed(0)} ms`);
+});
