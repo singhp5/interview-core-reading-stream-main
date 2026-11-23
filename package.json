@@ -9,5 +9,8 @@
     "test": "node --test \"test/**/*.test.ts\"",
     "start": "node src/cli.ts",
     "generate": "node scripts/generate.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6"
   }
 }

@@ -46,6 +46,10 @@ In the million-reading test, this works out to about 60 seqs, at most 4 open win
 
 Fixing 1–3 properly means putting a cap on what we hold, for example removing idle devices after a while or capping seqs per device. That gives up exactness: an occasional duplicate could get through. I'd want to agree that trade-off with the people consuming the data first.
 
+## Dependencies
+
+The only addition is `@types/node`, as a dev dependency. It's there so the editor can type-check `node:test`, `node:fs` and the other built-ins. Nothing needs it at run time: `npm test` and `npm start` still work without `npm install`, because Node strips the types and doesn't check them.
+
 ## Assumptions
 
 - `push` after `end()` isn't defined. The stream doesn't guard against it.
